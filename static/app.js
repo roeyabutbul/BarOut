@@ -458,7 +458,7 @@ function copyCode(btn) {
 function shareLink(btn) {
   const url = `${location.origin}?code=${state.code}`;
   if (navigator.share) {
-    navigator.share({ title: "Join my CallIt session!", text: `Code: ${state.code}`, url });
+    navigator.share({ title: "Join my Call-It session!", text: `Code: ${state.code}`, url });
   } else {
     navigator.clipboard.writeText(url).then(() => flash(btn, "✓", "🔗"));
   }
