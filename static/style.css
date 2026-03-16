@@ -135,8 +135,10 @@ body {
   white-space: nowrap;
 }
 .btn-small:hover { background: #262640; }
-.btn-majority { border-color: var(--primary); color: var(--primary); }
-.btn-confirm  { background: var(--primary); color: #000; font-weight: 700; border-color: var(--primary); }
+.btn-majority    { border-color: var(--primary); color: var(--primary); }
+.btn-confirm     { background: var(--primary); color: #000; font-weight: 700; border-color: var(--primary); }
+.btn-close-lobby { border-color: var(--error); color: var(--error); }
+.btn-close-lobby:hover { background: #2a1010; }
 
 /* ── Forms ────────────────────────────────────────────────── */
 .screen-header {

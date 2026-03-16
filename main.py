@@ -17,11 +17,14 @@ from pywebpush import webpush, WebPushException
 
 app = FastAPI()
 
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(cleanup_old_lobbies())
+
 # In-memory storage
 lobbies: Dict[str, dict] = {}
 connections: Dict[str, Dict[str, WebSocket]] = {}  # code -> {session_id: websocket}
 push_subs: Dict[str, List[dict]] = {}               # code -> [subscription_info, ...]
-pending_removals: Dict[str, asyncio.Task] = {}      # f"{code}:{session_id}" -> task
 
 
 # ── VAPID keys ───────────────────────────────────────────────────────────────
@@ -120,12 +123,6 @@ async def remove_member(code: str, session_id: str, reason: str):
     if session_id not in lobby["members"]:
         return
 
-    # Cancel any pending grace-period removal for this member
-    key = f"{code}:{session_id}"
-    if key in pending_removals:
-        pending_removals[key].cancel()
-        del pending_removals[key]
-
     member = lobby["members"][session_id]
     had_voted = member["voted"]
     was_creator = session_id == lobby["creator_id"]
@@ -143,7 +140,7 @@ async def remove_member(code: str, session_id: str, reason: str):
         new_creator_id = next(iter(lobby["members"]))
         lobby["creator_id"] = new_creator_id
 
-    # Empty lobby — clean up and stop
+    # Empty lobby — clean up
     if not lobby["members"]:
         del lobbies[code]
         push_subs.pop(code, None)
@@ -177,11 +174,20 @@ async def remove_member(code: str, session_id: str, reason: str):
         )
 
 
-async def grace_period_removal(code: str, session_id: str):
-    """Wait 2 minutes, then remove the member if they haven't reconnected."""
-    await asyncio.sleep(120)
-    await remove_member(code, session_id, reason="disconnected")
-    pending_removals.pop(f"{code}:{session_id}", None)
+async def cleanup_old_lobbies():
+    """Background task: delete lobbies that are more than 8 hours old."""
+    while True:
+        await asyncio.sleep(3600)  # check every hour
+        now = datetime.now()
+        expired = [
+            code for code, lobby in list(lobbies.items())
+            if (now - datetime.fromisoformat(lobby["created_at"])).total_seconds() > 28800
+        ]
+        for code in expired:
+            await broadcast(code, {"type": "lobby_closed", "reason": "expired"})
+            lobbies.pop(code, None)
+            push_subs.pop(code, None)
+            connections.pop(code, None)
 
 
 # ── Request models ──────────────────────────────────────────────────────────
@@ -350,6 +356,20 @@ async def kick_or_leave(code: str, target_id: str, requester_id: str):
     return {"ok": True}
 
 
+@app.delete("/api/lobby/{code}")
+async def close_lobby(code: str, session_id: str):
+    code = code.upper()
+    if code not in lobbies:
+        raise HTTPException(404, "Lobby not found")
+    if session_id != lobbies[code]["creator_id"]:
+        raise HTTPException(403, "Only the admin can close the lobby")
+    await broadcast(code, {"type": "lobby_closed", "reason": "admin_closed"})
+    lobbies.pop(code, None)
+    push_subs.pop(code, None)
+    connections.pop(code, None)
+    return {"ok": True}
+
+
 @app.patch("/api/lobby/{code}/threshold")
 async def update_threshold(code: str, req: ThresholdRequest):
     code = code.upper()
@@ -419,12 +439,6 @@ async def websocket_endpoint(websocket: WebSocket, code: str, session_id: str):
     code = code.upper()
     await websocket.accept()
 
-    # Cancel any pending grace-period removal on reconnect
-    key = f"{code}:{session_id}"
-    if key in pending_removals:
-        pending_removals[key].cancel()
-        del pending_removals[key]
-
     connections.setdefault(code, {})[session_id] = websocket
     try:
         while True:
@@ -434,10 +448,6 @@ async def websocket_endpoint(websocket: WebSocket, code: str, session_id: str):
     except WebSocketDisconnect:
         if code in connections:
             connections[code].pop(session_id, None)
-        # Start grace period — remove after 2 minutes if they don't reconnect
-        if code in lobbies and session_id in lobbies[code]["members"]:
-            task = asyncio.create_task(grace_period_removal(code, session_id))
-            pending_removals[key] = task
 
 
 async def broadcast(code: str, message: dict):

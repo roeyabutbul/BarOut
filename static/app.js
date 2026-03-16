@@ -282,6 +282,18 @@ async function cancelVote() {
 }
 
 // ── Leave / Kick ──────────────────────────────────────────────
+function goHome() {
+  localStorage.removeItem("barout_session");
+  state.code = null;
+  state.sessionId = null;
+  state.isCreator = false;
+  state.hasVoted = false;
+  state.lobbyStatus = "active";
+  if (state.ws) { state.ws.close(); state.ws = null; }
+  if (state.pingInterval) { clearInterval(state.pingInterval); state.pingInterval = null; }
+  showScreen("screen-home");
+}
+
 async function leaveLobby() {
   if (!confirm("Leave this lobby?")) return;
   try {
@@ -289,12 +301,15 @@ async function leaveLobby() {
       method: "DELETE",
     });
   } catch { /* ignore — we're leaving anyway */ }
-  localStorage.removeItem("barout_session");
-  state.code = null;
-  state.sessionId = null;
-  if (state.ws) { state.ws.close(); state.ws = null; }
-  if (state.pingInterval) { clearInterval(state.pingInterval); state.pingInterval = null; }
-  showScreen("screen-home");
+  goHome();
+}
+
+async function closeLobby() {
+  if (!confirm("Close the lobby for everyone? This cannot be undone.")) return;
+  try {
+    await fetch(`/api/lobby/${state.code}?session_id=${state.sessionId}`, { method: "DELETE" });
+  } catch { /* ignore — server will broadcast lobby_closed */ }
+  goHome();
 }
 
 async function kickMember(targetId) {
@@ -365,16 +380,16 @@ function handleWS(msg) {
       loadAndRender();
       break;
 
+    case "lobby_closed":
+      alert(msg.reason === "expired" ? "This lobby expired after 8 hours." : "The admin closed the lobby.");
+      goHome();
+      return;
+
     case "member_left":
       // If I was kicked, go home
       if (msg.session_id === state.sessionId) {
-        localStorage.removeItem("barout_session");
-        state.code = null;
-        state.sessionId = null;
-        if (state.ws) { state.ws.close(); state.ws = null; }
-        if (state.pingInterval) { clearInterval(state.pingInterval); state.pingInterval = null; }
         if (msg.reason === "kicked") alert("You were removed from the lobby.");
-        showScreen("screen-home");
+        goHome();
         return;
       }
       // If creator transferred to me
